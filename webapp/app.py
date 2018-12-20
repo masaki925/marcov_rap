@@ -14,9 +14,14 @@ def hello():
 @app.route('/rap', methods=['POST'])
 def rap():
     generator = GenerateText(n=1)
-    jsons = str(request.data, encoding='utf-8')
-    data = json.loads(jsons)
-    gen_txt = generator.generate(data['verse'])
+    if request.form:
+        verse = request.form['verse']
+    elif request.data:
+        jsons = str(request.data, encoding='utf-8')
+        data = json.loads(jsons)
+        verse = data['verse']
+
+    gen_txt = generator.generate(verse)
     return gen_txt
 
 if __name__ == '__main__':
