@@ -14,7 +14,7 @@ from logging import basicConfig, getLogger, DEBUG, ERROR
 from PrepareChain import PrepareChain
 
 # これはメインのファイルにのみ書く
-basicConfig(level=ERROR)
+basicConfig(level=DEBUG)
 
 # これはすべてのファイルに書く
 logger = getLogger(__name__)
@@ -24,12 +24,11 @@ class GenerateText(object):
     文章生成用クラス
     """
 
-    def __init__(self, n=5):
+    def __init__(self):
         """
         初期化メソッド
         @param n いくつの文章を生成するか
         """
-        self.n = n
         self.req_word = ''
         self.first_prefix = ''
 
@@ -49,10 +48,8 @@ class GenerateText(object):
         # 最終的にできる文章
         generated_text = ""
 
-        # 指定の数だけ作成する
-        for i in range(self.n):
-            text = self._generate_sentence(con, r_text)
-            generated_text += text
+        text = self._generate_sentence(con, r_text)
+        generated_text += text #.replace(self.first_prefix, self.req_word)
 
         # DBクローズ
         con.close()
@@ -192,6 +189,17 @@ class GenerateText(object):
         tmp_list = list(filter(None, tmp_list))
         if 'ん' in tmp_list: tmp_list.remove('ん')
         random.shuffle(tmp_list)
+
+        for word in tmp_list:
+            logger.debug('trynig word: {}...'.format(word))
+            for c in chains:
+                try:
+                    if word in c['prefix2'] or word in c['suffix']:
+                        self.req_word = word
+                        logger.debug('{}: {}'.format(word, c))
+                        return c
+                except:
+                    import pdb; pdb.set_trace()
 
         for word in tmp_list:
             logger.debug('trynig word: {}...'.format(word))

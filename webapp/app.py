@@ -13,7 +13,7 @@ def hello():
 
 @app.route('/rap', methods=['POST'])
 def rap():
-    generator = GenerateText(n=1)
+    generator = GenerateText()
     if request.form:
         verse = request.form['verse']
     elif request.data:
