@@ -14,7 +14,7 @@ from logging import basicConfig, getLogger, DEBUG, ERROR
 from PrepareChain import PrepareChain
 
 # これはメインのファイルにのみ書く
-basicConfig(level=DEBUG)
+basicConfig(level=ERROR)
 
 # これはすべてのファイルに書く
 logger = getLogger(__name__)
@@ -180,13 +180,26 @@ class GenerateText(object):
         text = unicodedata.normalize('NFKC',str(r_text))
         node = mt.parseToNode(text)
         while node:
+            logger.debug('node: ')
+            logger.debug(node.feature)
+            logger.debug('surface: ')
+            logger.debug(node.surface)
             if node.feature.startswith('名詞') or node.feature.startswith('形容詞'):
                 try:
-                    tmp_list.append(node.surface)
+                    word = node.feature.split(',')[6]
+                    if '俺' in word:
+                        word = word.replace('俺', 'おまえ')
+                    elif 'おまえ' in word:
+                        word = word.replace('おまえ', '俺')
+                    tmp_list.append(word)
                 except:
                     import pdb; pdb.set_trace()
             node = node.next
         tmp_list = list(filter(None, tmp_list))
+
+        logger.debug('tmp_list: ')
+        logger.debug(tmp_list)
+
         if 'ん' in tmp_list: tmp_list.remove('ん')
         random.shuffle(tmp_list)
 
@@ -202,7 +215,7 @@ class GenerateText(object):
                     import pdb; pdb.set_trace()
 
         for word in tmp_list:
-            logger.debug('trynig word: {}...'.format(word))
+            logger.debug('trynig similar word: {}...'.format(word))
             try:
                 sim_words = model.most_similar(positive=word, topn=20)
             except:
@@ -226,11 +239,11 @@ class GenerateText(object):
 
 if __name__ == '__main__':
     param = sys.argv
-    if (len(param) != 3):
-        print(("Usage: $ python " + param[0] + " (number) (request text)"))
+    if (len(param) != 2):
+        print(("Usage: $ python " + param[0] + " (request text)"))
         quit()  
 
     logger.setLevel(DEBUG)
-    generator = GenerateText(n=int(param[1]))
-    gen_txt = generator.generate(param[2])
+    generator = GenerateText()
+    gen_txt = generator.generate(param[1])
     print((gen_txt)) 
