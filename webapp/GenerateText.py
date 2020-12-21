@@ -11,10 +11,13 @@ import sys
 
 from logging import basicConfig, getLogger, DEBUG, ERROR
 
+from gensim.models import KeyedVectors
+
 from PrepareChain import PrepareChain
 
 # これはメインのファイルにのみ書く
-basicConfig(level=ERROR)
+# basicConfig(level=ERROR)
+basicConfig(level=DEBUG)
 
 # これはすべてのファイルに書く
 logger = getLogger(__name__)
@@ -31,8 +34,10 @@ class GenerateText(object):
         """
         self.req_word = ''
         self.first_prefix = ''
+        self.w2v_file_path = './data/jawiki.word_vectors.200d.bin'
+        self.w2v_vectors = KeyedVectors.load_word2vec_format(self.w2v_file_path, binary=True)
 
-    def generate(self, r_text=None):
+    def generate(self, r_text=None, reverse=False):
         """
         実際に生成する
         @return 生成された文章
@@ -48,7 +53,11 @@ class GenerateText(object):
         # 最終的にできる文章
         generated_text = ""
 
-        text = self._generate_sentence(con, r_text)
+        if reverse:
+            text = self._generate_sentence_reverse(con, r_text)
+        else:
+            text = self._generate_sentence(con, r_text)
+
         generated_text += text #.replace(self.first_prefix, self.req_word)
 
         # DBクローズ
@@ -82,8 +91,36 @@ class GenerateText(object):
 
         return result
 
+    def _generate_sentence_reverse(self, con, r_text):
+        """
+        ランダムに一文を生成する
+        @param con DBコネクション
+        @return 生成された1つの文章
+        """
+        # 生成文章のリスト
+        morphemes = []
+
+        # はじまりを取得
+        first_triplet = self._get_first_triplet_reverse(con, r_text)
+        if first_triplet[2] != PrepareChain.END:
+            morphemes.insert(0, first_triplet[2])
+        morphemes.insert(0, first_triplet[1])
+        morphemes.insert(0, first_triplet[0])
+
+        # 文章を紡いでいく
+        while morphemes[0] != PrepareChain.BEGIN:
+            suffix1 = morphemes[1]
+            suffix2 = morphemes[0]
+            triplet = self._get_triplet_reverse(con, suffix1, suffix2)
+            morphemes.insert(0, triplet[0])
+
+        # 連結
+        result = "".join(morphemes[1:])
+
+        return result
+
+
     def _get_chain_from_DB(self, con, prefixes):
-    # def _get_chain_from_DB(con, prefixes):
         """
         チェーンの情報をDBから取得する
         @param con DBコネクション
@@ -102,6 +139,29 @@ class GenerateText(object):
 
         # DBから取得
         cursor = con.execute(sql, prefixes)
+        for row in cursor:
+            result.append(dict(row))
+
+        return result
+
+    def _get_chain_from_DB_reverse(self, con, suffixes):
+        """
+        チェーンの情報をDBから取得する
+        @param con DBコネクション
+        @param suffixes チェーンを取得するsuffix の条件 tupleかlist
+        @return チェーンの情報の配列
+        """
+        # ベースとなるSQL
+        sql = "select prefix1, prefix2, suffix, freq from chain_freqs where suffix = ?"
+
+        if len(suffixes) == 2:
+            sql += " and prefix2 = ?"
+
+        # 結果
+        result = []
+
+        # DBから取得
+        cursor = con.execute(sql, suffixes)
         for row in cursor:
             result.append(dict(row))
 
@@ -129,6 +189,27 @@ class GenerateText(object):
 
         return (triplet["prefix1"], triplet["prefix2"], triplet["suffix"])
 
+    def _get_first_triplet_reverse(self, con, r_text):
+        """
+        文章のはじまりの3つ組をr_text を元に取得する
+        @param con DBコネクション
+        @return 文章のはじまりの3つ組のタプル
+        """
+        word_candidates = self._get_word_candidates(r_text)
+
+        for word in word_candidates:
+            suffixes = (word,)
+            # チェーン情報を取得
+            chains = self._get_chain_from_DB_reverse(con, suffixes)
+            if len(chains) > 0:
+                break
+
+        # 取得したチェーンから、リクエスト文を元に、関連の強い単語を含むtriplet を1つ選ぶ
+        triplet = self._get_intensive_triplet_reverse(con, chains, r_text)
+        self.last_prefix = triplet['prefix2']
+
+        return (triplet["prefix1"], triplet["prefix2"], triplet["suffix"])
+
     def _get_triplet(self, con, prefix1, prefix2):
         """
         prefix1とprefix2からsuffixをランダムに取得する
@@ -142,6 +223,25 @@ class GenerateText(object):
 
         # チェーン情報を取得
         chains = self._get_chain_from_DB(con, prefixes)
+
+        # 取得したチェーンから、確率的に1つ選ぶ
+        triplet = self._get_probable_triplet(chains)
+
+        return (triplet["prefix1"], triplet["prefix2"], triplet["suffix"])
+
+    def _get_triplet_reverse(self, con, suffix1, suffix2):
+        """
+        suffix1 とsuffix2 からprefix をランダムに取得する
+        @param con DBコネクション
+        @param suffix1 後ろから1つ目のsuffix
+        @param suffix2 後ろから2つ目のsuffix
+        @return 3つ組のタプル
+        """
+        # BEGINをprefix1としてチェーンを取得
+        suffixes = (suffix1, suffix2)
+
+        # チェーン情報を取得
+        chains = self._get_chain_from_DB_reverse(con, suffixes)
 
         # 取得したチェーンから、確率的に1つ選ぶ
         triplet = self._get_probable_triplet(chains)
@@ -167,16 +267,13 @@ class GenerateText(object):
 
         return chains[chain_index]
 
-    def _get_intensive_triplet(self, chains, r_text):
-        from gensim.models import Word2Vec
+    def _get_word_candidates(self, r_text):
         import unicodedata
         import MeCab
 
-        model = Word2Vec.load('./data/rap_w2v.model')
-
         mt = MeCab.Tagger("-Ochasen")
         mt.parse("") # NOTE: to avoid unicode error see detail at: https://qiita.com/kasajei/items/0805b433f363f1dba785
-        tmp_list = []
+        word_candidates = []
         text = unicodedata.normalize('NFKC',str(r_text))
         node = mt.parseToNode(text)
         while node:
@@ -191,20 +288,27 @@ class GenerateText(object):
                         word = word.replace('俺', 'おまえ')
                     elif 'おまえ' in word:
                         word = word.replace('おまえ', '俺')
-                    tmp_list.append(word)
+                    word_candidates.append(word)
                 except:
                     import pdb; pdb.set_trace()
             node = node.next
-        tmp_list = list(filter(None, tmp_list))
+        word_candidates = list(filter(None, word_candidates))
 
-        logger.debug('tmp_list: ')
-        logger.debug(tmp_list)
+        logger.debug('word_candidates: ')
+        logger.debug(word_candidates)
 
-        if 'ん' in tmp_list: tmp_list.remove('ん')
-        random.shuffle(tmp_list)
+        if 'ん' in word_candidates: word_candidates.remove('ん')
+        random.shuffle(word_candidates)
 
-        for word in tmp_list:
+        return word_candidates
+
+    def _get_intensive_triplet(self, chains, r_text):
+        word_candidates = self._get_word_candidates(r_text)
+
+        for word in word_candidates:
             logger.debug('trynig word: {}...'.format(word))
+            logger.debug(f'{chains=}')
+
             for c in chains:
                 try:
                     if word in c['prefix2'] or word in c['suffix']:
@@ -214,13 +318,15 @@ class GenerateText(object):
                 except:
                     import pdb; pdb.set_trace()
 
-        for word in tmp_list:
+        for word in word_candidates:
             logger.debug('trynig similar word: {}...'.format(word))
             try:
-                sim_words = model.most_similar(positive=word, topn=20)
-            except:
+                sim_words = self.w2v_vectors.most_similar(positive=word, topn=20)
+            except Exception as err:
+                logger.warn(f'    {err=}')
                 continue
 
+            logger.debug(f'    {sim_words=}')
             for s_word in sim_words:
                 logger.debug('    trynig s_word: {}...'.format(s_word))
                 for c in chains:
@@ -237,13 +343,56 @@ class GenerateText(object):
         logger.debug('///////////////////////////////')
         return self._get_probable_triplet(chains)
 
+    def _get_intensive_triplet_reverse(self, con, chains, r_text):
+        word_candidates = self._get_word_candidates(r_text)
+
+        for word in word_candidates:
+            logger.debug('trynig word: {}...'.format(word))
+            logger.debug(f'{chains=}')
+            for c in chains:
+                try:
+                    if word in c['prefix2'] or word in c['prefix1'] or word in c['suffix']:
+                        self.req_word = word
+                        logger.debug('{}: {}'.format(word, c))
+                        return c
+                except:
+                    import pdb; pdb.set_trace()
+
+        for word in word_candidates:
+            logger.debug('trynig similar word: {}...'.format(word))
+            try:
+                sim_words = self.w2v_vectors.most_similar(positive=word, topn=20)
+            except Exception as err:
+                logger.warn(f'    {err=}')
+                continue
+
+            logger.debug(f'    {sim_words=}')
+            for s_word in sim_words:
+                logger.debug('    trynig s_word: {}...'.format(s_word))
+                for c in chains:
+                    try:
+                        if s_word[0] in c['prefix2'] or s_word[0] in c['prefix1'] or word in c['suffix']:
+                            self.req_word = word
+                            logger.debug('{}: {}: {}'.format(word, s_word, c))
+                            return c
+                    except:
+                        import pdb; pdb.set_trace()
+
+        logger.debug('///////////////////////////////')
+        logger.debug('WARN: select first chain randomly')
+        logger.debug('///////////////////////////////')
+        suffixes = (PrepareChain.END,)
+        chains = self._get_chain_from_DB_reverse(con, suffixes)
+        return self._get_probable_triplet(chains)
+
+
 if __name__ == '__main__':
     param = sys.argv
     if (len(param) != 2):
         print(("Usage: $ python " + param[0] + " (request text)"))
-        quit()  
+        quit()
 
     logger.setLevel(DEBUG)
     generator = GenerateText()
-    gen_txt = generator.generate(param[1])
-    print((gen_txt)) 
+    gen_txt = generator.generate(param[1], reverse=True)
+    print((gen_txt))
