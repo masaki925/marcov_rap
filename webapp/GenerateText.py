@@ -14,6 +14,7 @@ from logging import basicConfig, getLogger, DEBUG, ERROR
 from gensim.models import KeyedVectors
 
 from PrepareChain import PrepareChain
+from modules.rhyme_distance_meter import RhymeDistanceMeter
 
 # これはメインのファイルにのみ書く
 # basicConfig(level=ERROR)
@@ -36,6 +37,50 @@ class GenerateText(object):
         self.first_prefix = ''
         self.w2v_file_path = './data/jawiki.word_vectors.200d.bin'
         self.w2v_vectors = KeyedVectors.load_word2vec_format(self.w2v_file_path, binary=True)
+        self.chara_word = '野球'
+        self.rdm = RhymeDistanceMeter(self.chara_word)
+        self.topn = 3
+        self.killer_phrases = [
+            '味噌と米ありゃ理想と言える',
+            '仲間がいるよ！！！',
+            'とうさん。やったんだんぜ。おれは！',
+            'ばかやろう。親子の間でそんな遠慮いるかい… おまえをこのままうずもらせてたまるか… そのためには片目が… 両目だって惜しくはないわい。',
+            '角膜移植か…不知火はお父さんの片目をもらって復活してきたのか。再起をかけた一打だからこそあれだけ喜んだのか。',
+            '打てなくともその倍守る。あの山田まさしく20年に一人の捕手だぜ。',
+            'やった太郎。よくこわがらずにやったぞ。 これだ。この勇気がサチ子を助けたんじゃ。',
+            '悔しいてわいは涙するんやないで。わいがいながら負けたことがなさけのうてほえとるんじゃい。',
+            '山田、おれたちはまだ人生18年だ。苦しいとか辛いなんていう柄じゃないんだな。',
+            'おじさんはハゲや。そやさかいハゲも髪型のひとつなんや！気にせんと頑張らな。',
+            '血は・・・血はグラウンドで流すもの',
+            'これは俺達の血と汗が混じった高知の土だ',
+            '泣くな武蔵、胸を張れ',
+            '俺達の思い出に残る大会にしようぜ',
+            'お兄ちゃん、また勝てなかったよ',
+            'うぇへへ・・・おまたせしやした、山田君',
+            '天才か・・・思えばそう言われたこともあったづらな・・・',
+            'こめ・・・米が・・・もらえない',
+            '勝たなあかんねん',
+            '俺達は１０００円作るのに苦労したんだ・・・こいつを倒すまで俺は野球をやめねぇ',
+            'あーばよぉー、まーたなぁー',
+            'まだ裏があらーね',
+            'オヤジ・・・今分かったぜ。球汚れなく道険し・・・道、けわし・・・',
+            'こんなものしてるからいかんのだ！',
+            '俺達はガキの頃から野球やってきたんだ。あんなニワカな奴らに負けたら全国の球児に申し訳が立たんってもんだ！',
+            '俺は本当に後悔しているぜ。こんな奴だとは知らずに３年間努力したことを・・・。。。かなうはずないよな。。。',
+        ]
+
+    def __max_score(self, text_list, killer_phrase):
+        max_score = -1
+        max_text = None
+        logger.debug(f'{killer_phrase=}')
+        for text in text_list:
+            score = self.rdm.throw(text, killer_phrase)
+            logger.debug(f'{score=}, {text=}')
+            if score > max_score:
+                max_score = score
+                max_text = text
+
+        return max_text
 
     def generate(self, r_text=None, reverse=False):
         """
@@ -54,7 +99,10 @@ class GenerateText(object):
         generated_text = ""
 
         if reverse:
-            text = self._generate_sentence_reverse(con, r_text)
+            killer_phrase = random.choice(self.killer_phrases)
+            text_list = self._generate_sentences_reverse(con, r_text, killer_phrase)
+            text = self.__max_score(text_list, killer_phrase)
+            text += f"\n{killer_phrase}"
         else:
             text = self._generate_sentence(con, r_text)
 
@@ -91,33 +139,50 @@ class GenerateText(object):
 
         return result
 
-    def _generate_sentence_reverse(self, con, r_text):
+    def _generate_sentences_reverse(self, con, r_text, killer_phrase):
         """
         ランダムに一文を生成する
         @param con DBコネクション
         @return 生成された1つの文章
         """
-        # 生成文章のリスト
-        morphemes = []
+        results = []
+        word_candidates = self._get_word_candidates(r_text)
+        exmapded_words = []
+        for word in word_candidates:
+            exmapded_words.append(word)
+            if word in self.w2v_vectors.vocab:
+                __sim_words = self.w2v_vectors.most_similar(positive=[word, self.chara_word], topn=20)
+                sim_words = self.rdm.most_rhyming(killer_phrase, [sim_word[0] for sim_word in __sim_words], topn=self.topn)
+                exmapded_words += sim_words
 
-        # はじまりを取得
-        first_triplet = self._get_first_triplet_reverse(con, r_text)
-        if first_triplet[2] != PrepareChain.END:
-            morphemes.insert(0, first_triplet[2])
-        morphemes.insert(0, first_triplet[1])
-        morphemes.insert(0, first_triplet[0])
+        logger.debug(f'{word_candidates=}')
+        logger.debug(f'{exmapded_words=}')
+        for word in exmapded_words:
+            logger.debug(f'{word=}')
+            # 生成文章のリスト
+            morphemes = []
 
-        # 文章を紡いでいく
-        while morphemes[0] != PrepareChain.BEGIN:
-            suffix1 = morphemes[1]
-            suffix2 = morphemes[0]
-            triplet = self._get_triplet_reverse(con, suffix1, suffix2)
-            morphemes.insert(0, triplet[0])
+            # はじまりを取得
+            first_triplet = self._get_first_triplet_reverse(con, word)
+            if first_triplet[2] != PrepareChain.END:
+                morphemes.insert(0, first_triplet[2])
+            morphemes.insert(0, first_triplet[1])
+            morphemes.insert(0, first_triplet[0])
 
-        # 連結
-        result = "".join(morphemes[1:])
+            # 文章を紡いでいく
+            while morphemes[0] != PrepareChain.BEGIN:
+                suffix1 = morphemes[1]
+                suffix2 = morphemes[0]
+                triplet = self._get_triplet_reverse(con, suffix1, suffix2)
+                morphemes.insert(0, triplet[0])
 
-        return result
+            # 連結
+            result = "".join(morphemes[1:])
+            logger.debug(f'{result=}')
+            results.append(result)
+
+        logger.debug(f'{results=}')
+        return results
 
 
     def _get_chain_from_DB(self, con, prefixes):
@@ -189,24 +254,20 @@ class GenerateText(object):
 
         return (triplet["prefix1"], triplet["prefix2"], triplet["suffix"])
 
-    def _get_first_triplet_reverse(self, con, r_text):
+    def _get_first_triplet_reverse(self, con, word):
         """
         文章のはじまりの3つ組をr_text を元に取得する
         @param con DBコネクション
         @return 文章のはじまりの3つ組のタプル
         """
-        word_candidates = self._get_word_candidates(r_text)
 
-        for word in word_candidates:
-            suffixes = (word,)
-            # チェーン情報を取得
+        suffixes = (word,)
+        chains = self._get_chain_from_DB_reverse(con, suffixes)
+        if len(chains) == 0:
+            suffixes = (PrepareChain.END,)
             chains = self._get_chain_from_DB_reverse(con, suffixes)
-            if len(chains) > 0:
-                break
 
-        # 取得したチェーンから、リクエスト文を元に、関連の強い単語を含むtriplet を1つ選ぶ
-        triplet = self._get_intensive_triplet_reverse(con, chains, r_text)
-        self.last_prefix = triplet['prefix2']
+        triplet = self._get_probable_triplet(chains)
 
         return (triplet["prefix1"], triplet["prefix2"], triplet["suffix"])
 
@@ -341,48 +402,6 @@ class GenerateText(object):
         logger.debug('///////////////////////////////')
         logger.debug('WARN: select first chain randomly')
         logger.debug('///////////////////////////////')
-        return self._get_probable_triplet(chains)
-
-    def _get_intensive_triplet_reverse(self, con, chains, r_text):
-        word_candidates = self._get_word_candidates(r_text)
-
-        for word in word_candidates:
-            logger.debug('trynig word: {}...'.format(word))
-            logger.debug(f'{chains=}')
-            for c in chains:
-                try:
-                    if word in c['prefix2'] or word in c['prefix1'] or word in c['suffix']:
-                        self.req_word = word
-                        logger.debug('{}: {}'.format(word, c))
-                        return c
-                except:
-                    import pdb; pdb.set_trace()
-
-        for word in word_candidates:
-            logger.debug('trynig similar word: {}...'.format(word))
-            try:
-                sim_words = self.w2v_vectors.most_similar(positive=word, topn=20)
-            except Exception as err:
-                logger.warn(f'    {err=}')
-                continue
-
-            logger.debug(f'    {sim_words=}')
-            for s_word in sim_words:
-                logger.debug('    trynig s_word: {}...'.format(s_word))
-                for c in chains:
-                    try:
-                        if s_word[0] in c['prefix2'] or s_word[0] in c['prefix1'] or word in c['suffix']:
-                            self.req_word = word
-                            logger.debug('{}: {}: {}'.format(word, s_word, c))
-                            return c
-                    except:
-                        import pdb; pdb.set_trace()
-
-        logger.debug('///////////////////////////////')
-        logger.debug('WARN: select first chain randomly')
-        logger.debug('///////////////////////////////')
-        suffixes = (PrepareChain.END,)
-        chains = self._get_chain_from_DB_reverse(con, suffixes)
         return self._get_probable_triplet(chains)
 
 

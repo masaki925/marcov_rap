@@ -4,3 +4,6 @@ Jinja2
 Werkzeug
 mecab-python3
 gensim
+bert_score
+fugashi
+ipadic
