@@ -37,30 +37,26 @@ class RhymeDistanceMeter:
         logger.debug(f'{vowel1=}')
         logger.debug(f'{vowel2=}')
 
-        len1 = len(vowel1)
-        len2 = len(vowel2)
+        min_len = min(len(vowel1), len(vowel2))
 
-        if len1 > len2:
-            shorter = vowel2
-            longer = vowel1
-        else:
-            shorter = vowel1
-            longer = vowel2
-        
-        min_len = len(shorter)
-        if min_len < self.min_rhyme:
-            return 0
-        
-        n = min_len - self.min_rhyme
-        for i in range(n):
-            if shorter[i:] in longer:
-                return min_len - i
+        cnt = 0
+        # 脚韻
+        for i in range(1, min_len+1):
+            if vowel1[-i] == vowel2[-i]:
+                cnt += 1
+            else:
+                break
+        if cnt > 0:
+            return cnt
 
-        for i in range(1, n):
-            if shorter[:-i] in longer:
-                return min_len - i
+        # 頭韻
+        for i in range(min_len):
+            if vowel1[i] == vowel2[i]:
+                cnt += 1
+            else:
+                break
 
-        return 0
+        return cnt
 
     def score_similarity(self, s1, s2):
         refs = [s1]
